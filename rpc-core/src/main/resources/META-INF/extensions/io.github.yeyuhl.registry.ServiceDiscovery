@@ -1,0 +1,2 @@
+zk=io.github.yeyuhl.registry.zk.ZkServiceDiscoveryImpl
+nacos=io.github.yeyuhl.registry.nacos.NacosServiceDiscoveryImpl

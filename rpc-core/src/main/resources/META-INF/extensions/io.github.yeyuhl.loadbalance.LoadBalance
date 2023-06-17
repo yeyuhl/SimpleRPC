@@ -1,0 +1,1 @@
+loadBalance=io.github.yeyuhl.loadbalance.loadbalancer.ConsistentHashLoadBalance

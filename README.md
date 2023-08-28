@@ -1,4 +1,4 @@
-> 在做学校云计算课程的实验中，涉及到了许多分布式相关的知识。由于lab2我是使用Netty取巧完成，而lab3涉及到RPC相关知识，因此实现一个简单的RPC框架（基于Netty+Kyro+Zookeeper/Nacos）来深入学习。
+> 在做学校云计算课程的实验中，涉及到了许多分布式相关的知识。由于lab2我是使用Netty取巧完成，而lab3涉及到RPC相关知识，因此实现一个简单的RPC框架（基于Netty+Kyro+ZooKeeper/Nacos）来深入学习。
 
 # RPC介绍
 

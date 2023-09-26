@@ -1,4 +1,4 @@
-> 在做学校云计算课程的实验中，涉及到了许多分布式相关的知识。由于lab2我是使用Netty取巧完成，而lab3涉及到RPC相关知识，因此实现一个简单的RPC框架（基于Netty+Kyro+ZooKeeper/Nacos）来深入学习。
+> 在做学校云计算课程的实验中，涉及到了许多分布式相关的知识。由于lab2我是使用Netty取巧完成，而lab3涉及到RPC相关知识，因此实现一个简单的RPC框架（基于Netty+Hessian+Zookeeper/Nacos）来深入学习。
 
 # RPC介绍
 
@@ -157,9 +157,9 @@ SimpleRPC
 
 ## 2. 代码实现
 
-### rpc-core：remoting（网络传输模块）
+### rpc-core: remoting（网络传输模块）
 
-#### 前言
+#### 介绍
 
 这个模块的首要任务就是让客户端和服务器实现通信，使数据能在二者中传递。如果基于socket实现的话，客户端可以通过socket与服务器建立连接，而服务器可以通过BIO的形式监听socket。当有请求过来时，新开一个线程对其进行处理，处理完之后再发回给客户端。当有n个客户端连接，那就要新建n个线程处理相应请求，并且如果请求还未处理完成，比如要读取某一数据，但当前并无数据可读，线程就会阻塞在读操作。不难看出，当并发量很大的时候，BIO是一种很糟糕的选择，这会导致线程资源的浪费。
 
@@ -568,7 +568,7 @@ public class ChannelProvider {
 
 这两种方法都默认内置线程池，不需要我们再单独创建线程池，并且比起Future支持很多种方法的组合，此处不再展开。值得注意的是，CompletableFuture获取运算结果的get方法，还是阻塞的。
 
-回到这个类上面来，这个类真正用到CompletableFuture的方法其实只有一个，那就是complete方法。当服务器处理完请求，返回一个RpcResponse时，客户端的handler调用complete并将RpcResponse存入map中。complete意味着计算完成，所以每个future的complete只能调用一次。由于还设计了动态代理，当代理类调用完客户端的sendRpcRequest方法后，我们用CompletableFuture<RpcResponse< Object >> completableFuture来承载其返回值。并且调用completableFuture的get方法来获取RpcResponse，此时会阻塞代理类该线程，但是客户端仍然可以正常工作，不会对其造成影响。这样一来，就提高了程序的运行效率。
+回到这个类上面来，这个类真正用到CompletableFuture的方法其实只有一个，那就是complete方法。当服务器处理完请求，返回一个RpcResponse时，客户端的handler调用complete并将RpcResponse存入map中。complete意味着计算完成，所以每个future的complete只能调用一次。由于还设计了动态代理，当代理类调用完客户端的sendRpcRequest方法后，我们用CompletableFuture<RpcResponse< Object >> completableFuture来承载其返回值。并且调用completableFuture的get方法来获取RpcResponse，此时会阻塞代理类的线程，但是客户端仍然可以正常工作，不会对其造成影响。这样一来，就提高了程序的运行效率。
 
 ```java
 public class UnprocessedRequests {
@@ -850,9 +850,210 @@ public class NettyRpcServer {
             ReferenceCountUtil.release(msg);
         }
     }
-
 ```
 
-#### 最后
+### rpc-core: proxy（动态代理模块）
 
-剩下的其实没有太多和RPC相关的内容了，都是围绕着RPC的扩展。比如说借鉴了Dubbo的ExtensionLoader，可以通过自定义的文件配置，来决定扩展什么服务，像使用何种注册中心，何种序列化，何种负载均衡策略。又比如说设计SingletonFactory，让工厂来管理唯一实例，我们需要哪个类的实例可以通过工厂获取或者创建，不需要自己手动处理。又比如设计各种注解外加bean的后置处理器，实现像Springboot一样通过注解来注册和使用服务。此外，比起zookeeper，我更推荐使用nacos，nacos由于内部已经实现了很多方法，因此配置起来比zookeeper简单很多。
+#### 代理模式
+
+所谓**代理模式**，就是我们**使用代理对象来代替对真实对象(real object)的访问，这样就可以在不修改原目标对象的前提下，提供额外的功能操作，扩展目标对象的功能**。代理模式的主要作用是**扩展目标对象的功能，比如说在目标对象的某个方法执行前后你可以增加一些自定义的操作**。
+
+举个例子：假如房东要将房子出售，于是到房地产中介公司找一个中介（代理），由他来帮房东完成销售房屋，签订合同、网签、贷款过户等等事宜。
+
+#### 静态代理
+
+**静态代理中，我们对目标对象的每个方法的增强都是手动完成的，非常不灵活（比如接口一旦新增加方法，目标对象和代理对象都要进行修改）且麻烦(需要对每个目标类都单独写一个代理类）**。实际应用场景非常非常少，日常开发几乎看不到使用静态代理的场景。
+
+上面我们是从实现和应用角度来说的静态代理，从 JVM 层面来说， **静态代理在编译时就将接口、实现类、代理类这些都变成了一个个实际的 class 文件。**
+
+静态代理实现步骤:
+
+- 定义一个接口及其实现类；
+  
+- 创建一个代理类同样实现这个接口。
+  
+- 将目标对象注入进代理类，然后在代理类的对应方法调用目标类中的对应方法。这样的话，我们就可以通过代理类屏蔽对目标对象的访问，并且可以在目标方法执行前后做一些自己想做的事情。
+  
+
+```java
+// 发送短信的接口
+public interface SmsService {
+    String send(String message);
+}
+
+// 实现发送短信的接口
+public class SmsServiceImpl implements SmsService {
+    public String send(String message) {
+        System.out.println("send message:" + message);
+        return message;
+    }
+}
+
+// 创建代理类并同样实现发送短信的接口
+public class SmsProxy implements SmsService {
+
+    private final SmsService smsService;
+
+    public SmsProxy(SmsService smsService) {
+        this.smsService = smsService;
+    }
+
+    @Override
+    public String send(String message) {
+        //调用方法之前，我们可以添加自己的操作
+        System.out.println("before method send()");
+        smsService.send(message);
+        //调用方法之后，我们同样可以添加自己的操作
+        System.out.println("after method send()");
+        return null;
+    }
+}
+
+// 实际使用
+public class Main {
+    public static void main(String[] args) {
+        SmsService smsService = new SmsServiceImpl();
+        SmsProxy smsProxy = new SmsProxy(smsService);
+        smsProxy.send("java");
+    }
+}
+```
+
+#### 动态代理
+
+相比于静态代理来说，动态代理更加灵活。我们不需要针对每个目标类都单独创建一个代理类，并且也不需要我们必须实现接口，我们可以直接代理实现类( CGLIB 动态代理机制)。**从 JVM 角度来说，动态代理是在运行时动态生成类字节码，并加载到 JVM 中的**。在Java中常用到的动态代理一般是 **JDK 动态代理**和**CGLIB 动态代理**。在本项目中就使用了JDK动态代理。
+
+**JDK动态代理**
+
+在JDK动态代理里面，**`InvocationHandler` 接口和 `Proxy` 类是核心**。RpcClientProxy类就实现了InvocationHandler接口。
+
+```java
+public class RpcClientProxy implements InvocationHandler {
+
+}
+```
+
+而Proxy类中，最常使用的就是newProxyInstance()方法，用来生成一个代理对象。这个方法一共有 3 个参数：
+
+- **loader**：类加载器，用于加载代理对象。
+  
+- **interfaces**：被代理类实现的一些接口。
+  
+- **h**：实现了 `InvocationHandler` 接口的对象；
+  
+
+```java
+    public <T> T getProxy(Class<T> clazz) {
+        // 生成代理对象，参数为：代理对象的类加载器，被代理类实现的接口，实现了InvocationHandler接口的对象
+        return (T) Proxy.newProxyInstance(clazz.getClassLoader(), new Class<?>[]{clazz}, this);
+    }
+```
+
+要实现动态代理的话，还必须需要实现`InvocationHandler` 来自定义处理逻辑。 当我们的动态代理对象调用一个方法时，这个方法的调用就会被转发到实现`InvocationHandler` 接口类的 `invoke` 方法来调用。`invoke()` 方法有下面三个参数：
+
+- **proxy**：动态生成的代理类。
+  
+- **method**：与代理类对象调用的方法相对应。
+  
+- **args**：当前 method 方法的参数。
+  
+
+```java
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        log.info("invoked method: [{}]", method.getName());
+        RpcRequest rpcRequest = RpcRequest.builder()
+                .interfaceName(method.getDeclaringClass().getName())
+                .methodName(method.getName())
+                .parameters(args)
+                .paramTypes(method.getParameterTypes())
+                .requestId(UUID.randomUUID().toString())
+                .group(rpcServiceConfig.getGroup())
+                .version(rpcServiceConfig.getVersion())
+                .build();
+        RpcResponse<Object> rpcResponse = null;
+        if (rpcRequestTransport instanceof NettyRpcClient) {
+            CompletableFuture<RpcResponse<Object>> completableFuture = (CompletableFuture<RpcResponse<Object>>) rpcRequestTransport.sendRpcRequest(rpcRequest);
+            rpcResponse = completableFuture.get();
+        }
+        this.check(rpcResponse, rpcRequest);
+        return rpcResponse.getData();
+    }
+```
+
+也就是说：**你通过`Proxy` 类的 `newProxyInstance()` 创建的代理对象在调用方法的时候，实际会调用到实现`InvocationHandler` 接口的实现类的 `invoke()`方法**。你可以在 `invoke()` 方法中自定义处理逻辑，比如在方法执行前后做什么事情。
+
+**CGLIB动态代理**
+
+**JDK 动态代理有一个最致命的问题是其只能代理实现了接口的类**。为了解决这个问题，我们可以用 CGLIB 动态代理机制来避免。[CGLIB](https://github.com/cglib/cglib)(*Code Generation Library*)是一个基于[ASM](http://www.baeldung.com/java-asm)的字节码生成库，它允许我们在运行时对字节码进行修改和动态生成。CGLIB 通过继承方式实现代理。很多知名的开源框架都使用到了[CGLIB](https://github.com/cglib/cglib)， 例如 Spring 中的 AOP 模块中：如果目标对象实现了接口，则默认采用 JDK 动态代理，否则采用 CGLIB 动态代理。在 CGLIB 动态代理机制中 **`MethodInterceptor` 接口和 `Enhancer` 类是核心**。
+
+你需要自定义 `MethodInterceptor` 并重写 `intercept` 方法，`intercept` 用于拦截增强被代理类的方法。
+
+```java
+public interface MethodInterceptor extends Callback{
+    // 拦截被代理类中的方法
+    public Object intercept(Object obj, java.lang.reflect.Method method, Object[] args,MethodProxy proxy) throws Throwable;
+}
+```
+
+- **obj**：被代理的对象（需要增强的对象）
+  
+- **method**：被拦截的方法（需要增强的方法）
+  
+- **args**：方法入参
+  
+- **proxy**：用于调用原始方法
+  
+
+你可以通过 `Enhancer`类来动态获取被代理类，当代理类调用方法的时候，实际调用的是 `MethodInterceptor` 中的 `intercept` 方法。
+
+一般CGLIB 动态代理类使用步骤如下：
+
+- 定义一个类；
+- 自定义 `MethodInterceptor` 并重写 `intercept` 方法，`intercept` 用于拦截增强被代理类的方法，和 JDK 动态代理中的 `invoke` 方法类似；
+- 通过 `Enhancer` 类的 `create()`创建代理类；
+
+#### 比较二者
+
+先比较JDK动态代理和CGLIB动态代理：
+
+- **JDK 动态代理只能代理实现了接口的类或者直接代理接口，而 CGLIB 可以代理未实现任何接口的类。** 另外， CGLIB 动态代理是通过生成一个被代理类的子类来拦截被代理类的方法调用，因此不能代理声明为 final 类型的类和方法。
+  
+- 就二者的效率来说，大部分情况都是 JDK 动态代理更优秀，随着 JDK 版本的升级，这个优势更加明显。
+  
+
+然后来比较静态代理和动态代理：
+
+- **灵活性**：动态代理更加灵活，不需要必须实现接口，可以直接代理实现类，并且可以不需要针对每个目标类都创建一个代理类。另外，静态代理中，接口一旦新增加方法，目标对象和代理对象都要进行修改，这是非常麻烦的！
+  
+- **JVM 层面**：静态代理在编译时就将接口、实现类、代理类这些都变成了一个个实际的 class 文件。而动态代理是在运行时动态生成类字节码，并加载到 JVM 中的。
+  
+
+## 3. 总结发言
+
+最后来总结一遍整个RPC框架的运行流程：
+
+客户端：
+
+- 有一个启动类和一个控制器类，启动类通过自定义的注解@RpcScan获取了控制器类的Bean，然后调用了控制器类的test方法。而控制器类调用了测试用的API接口里的方法，该接口的实现类在服务端。
+  
+- 由于控制器类里的HelloService接口有@RpcReference注解，@RpcReference通过Spring的BeanPostProcessor的子类，重写postProcessAfterInitialization方法，在 Bean初始化之后对其进行修改，这里要做的其实就是通过代理类RpcClientProxy来代理NettyRpcClient，NettyRpcClient在注册中心获取到了所需服务的地址后，与NettyRpcServer建立连接并发送请求。
+  
+- 最后等待对面返回响应并对响应进行检查。
+  
+
+服务端：
+
+- 有一个启动类和两个服务接口实现类，启动类通过自定义的注解@RpcScan获取了NettyRpcServer的Bean，然后调用其registerService方法注册服务，服务将会保存到ServiceProvider并由ServiceProvider向注册中心注册，最后启动NettyRpcServer。
+  
+- 当NettyRpcServer收到请求，交由NettyRpcServerHandler处理，NettyRpcServerHandler又将请求转交到RpcRequestHandler处理，RpcRequestHandler调用ServiceProvider对应服务，并将结果层层返回给NettyRpcServer。
+  
+- NettyRpcServer将得到的结果发给NettyRpcClient。
+  
+
+总体流程图如下：
+
+左边阴影可认为是Consumer，右边阴影可认为是Provider。
+
+![](https://yeyu-1313730906.cos.ap-guangzhou.myqcloud.com/PicGo/rpc.drawio.png)
+
+除去remoting模块外，剩下的模块其实没有太多和RPC强相关的内容了，都是围绕着RPC的扩展。比如说借鉴了Dubbo的ExtensionLoader，可以通过自定义的文件配置，来决定扩展什么服务，像使用何种注册中心，何种序列化，何种负载均衡策略。又比如说设计SingletonFactory，让工厂来管理唯一实例，我们需要哪个类的实例可以通过工厂获取或者创建，不需要自己手动处理。又比如设计各种注解外加bean的后置处理器，实现像Spring Boot一样通过注解来注册和使用服务。此外，比起ZooKeeper，我更推荐使用Nacos，Nacos由于内部已经实现了很多方法，因此配置起来比ZooKeeper简单很多。
